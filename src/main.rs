@@ -5,9 +5,9 @@ use bigdecimal::num_bigint::BigInt;
 use nom::{AsChar, IResult, Parser};
 use nom::branch::alt;
 use nom::bytes::complete::{tag, tag_no_case};
-use nom::character::complete::{char, hex_digit1, multispace1};
+use nom::character::complete::{char, hex_digit1, multispace0, multispace1};
 use nom::combinator::{eof, fail};
-use nom::multi::{many0, separated_list0};
+use nom::multi::{many0, many1, separated_list0};
 use nom::number::complete::recognize_float;
 use nom::sequence::{preceded, terminated};
 
@@ -20,11 +20,8 @@ fn main() {
     match terminated(parse_input, eof)(&input) {
         Ok((_, program)) => {
             let mut kroth = Kroth::default();
-            for command in dbg!(program) {
-                if let Err(err) = command.operate(&mut kroth) {
-                    println!("{err:?}");
-                    return;
-                }
+            if let Err(err) = kroth.run_program(program) {
+                println!("{err:?}")
             }
         }
         Err(err) => println!("{err:?}")
@@ -37,34 +34,29 @@ fn parse_input(input: &str) -> IResult<&str, Vec<Command>> {
         number_literal.map(|n| Command::Push(KrothValue::Number(n))),
         type_literal.map(|t| Command::Push(KrothValue::Type(t))),
         basic_command,
-        block.map(|cmds| Command::Push(KrothValue::Block(cmds)))
-    )))(input)
+        block.map(|cmds| Command::Push(KrothValue::Block(cmds))),
+        var
+    )))(input.trim())
 }
 
-
-
 fn block(input: &str) -> IResult<&str, Vec<Command>> {
-    terminated(preceded(char('{'), parse_input), char('}'))(input)
+    terminated(preceded(terminated(char('{'), multispace0), parse_input), preceded(multispace0, char('}')))(input.trim())
 }
 
 fn basic_command(input: &str) -> IResult<&str, Command> {
     macro_rules! literal {
-        ($command:expr) => {{
-            tag_no_case(stringify!($command)).map(|_| $command)
-        }};
+        ($($command:expr),+) => {($(tag_no_case(stringify!($command)).map(|_| $command),)+)};
     }
     use Command::*;
     alt((
-        literal!(Drop),
-        literal!(Dup),
-        literal!(Over),
-        literal!(Swap),
-        literal!(Print),
-        literal!(Input),
-        literal!(Cast),
-        literal!(Call),
+        alt(literal!(Drop, Dup, Over, Swap, Print, Input, Cast, Call)),
+        alt(literal!(IfElse, If, While)),
+        alt(literal!(Add, Sub, Mul, Div, Mod)),
+        alt(literal!(Xor, Or, And, Not)),
+        alt(literal!(LtEq, GtEq, Gt, Lt, Neq, Eq))
     ))(input)
 }
+
 
 fn type_literal(input: &str) -> IResult<&str, KrothType> {
     terminated(preceded(char('<'), alt((
@@ -76,10 +68,42 @@ fn type_literal(input: &str) -> IResult<&str, KrothType> {
 
 fn string_char(input: &str) -> IResult<&str, char> {
     let mut chars = input.chars();
-    // TODO: Escaping
     match chars.next() {
-        None | Some('\\' | '\"' | '\n' | '\r') => fail(input),
+        None | Some('"') => fail(input),
+        Some('\\') => match chars.next() {
+            Some('"') => Ok((&input[2..], '"')),
+            Some('\\') => Ok((&input[2..], '\\')),
+            Some('n') => Ok((&input[2..], '\n')),
+            Some('r') => Ok((&input[2..], '\r')),
+            Some('\r') => if let Some('\n') = chars.next() {
+                Ok((&input[3..], '\n'))
+            } else {
+                fail(input)
+            }
+            Some('\n') => Ok((&input[2..], '\n')),
+            _ => fail(input)
+        }
         Some(c) => Ok((&input[c.len()..], c)),
+    }
+}
+
+fn var(input: &str) -> IResult<&str, Command> {
+    alt((
+        preceded(char('&'), var_name).map(Command::SetVar),
+        preceded(char('*'), var_name).map(Command::GetVar)
+    ))(input)
+}
+
+fn var_name(input: &str) -> IResult<&str, Box<str>> {
+    many1(var_name_char).map(|c| Box::from(c.into_iter().collect::<String>())).parse(input)
+}
+
+fn var_name_char(input: &str) -> IResult<&str, char> {
+    let mut chars = input.chars();
+    match chars.next() {
+        Some('_') => Ok((&input[1..], '_')),
+        Some(c) if c.is_alphabetic() => Ok((&input[c.len()..], c)),
+        _ => fail(input),
     }
 }
 

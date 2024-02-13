@@ -1,5 +1,10 @@
-"Enter a value to cast" print
-input
-"Enter a type to cast to" print
-{cast dup print}
-input <Type> cast swap call
+"euler 1" print
+0 &sum
+1 &i
+{ *i 1000 lt } dup call {
+    *i 3 mod 0 eq *i 5 mod 0 eq or {
+        *sum *i add &sum
+    } if
+    *i 1 add &i
+dup call } while
+*sum print
