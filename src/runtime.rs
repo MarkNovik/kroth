@@ -1,13 +1,20 @@
 use std::collections::HashMap;
 use std::error::Error;
 use std::fmt::{Display, Formatter};
+
 use bigdecimal::BigDecimal;
+
+use crate::runtime::RuntimeError::InvalidType;
 
 macro_rules! ok {
     ($s:stmt) => {{
         $s
         Ok(())
     }};
+}
+
+macro_rules! err {
+    ($err:expr) => {{return Err($err);}};
 }
 
 macro_rules! ensure_size {
@@ -55,6 +62,7 @@ pub enum KrothType {
     Num,
     Str,
     Typ,
+    Blck,
 }
 
 impl KrothType {
@@ -64,6 +72,7 @@ impl KrothType {
             KrothValue::Number(_) => Num,
             KrothValue::String(_) => Str,
             KrothValue::Type(_) => Typ,
+            KrothValue::Block(_) => Blck
         }
     }
 }
@@ -73,7 +82,8 @@ impl Display for KrothType {
         match self {
             KrothType::Num => f.write_str("Number"),
             KrothType::Str => f.write_str("String"),
-            KrothType::Typ => f.write_str("Type")
+            KrothType::Typ => f.write_str("Type"),
+            KrothType::Blck => f.write_str("Block"),
         }
     }
 }
@@ -83,6 +93,7 @@ pub enum KrothValue {
     Number(BigDecimal),
     String(Box<str>),
     Type(KrothType),
+    Block(Vec<Command>),
 }
 
 impl Display for KrothValue {
@@ -90,11 +101,13 @@ impl Display for KrothValue {
         match self {
             KrothValue::Number(num) => f.write_fmt(format_args!("{num}")),
             KrothValue::String(str) => f.write_str(str),
-            KrothValue::Type(typ) => f.write_fmt(format_args!("{typ}")),
+            KrothValue::Type(typ) => f.write_fmt(format_args!("<{typ}>")),
+            KrothValue::Block(_) => f.write_fmt(format_args!("{{block}}")),
         }
     }
 }
 
+#[derive(Debug, Clone)]
 pub enum Command {
     Drop,
     Dup,
@@ -103,6 +116,7 @@ pub enum Command {
     Print,
     Input,
     Cast,
+    Call,
     Push(KrothValue),
 }
 
@@ -141,51 +155,58 @@ impl Command {
             Command::Input => {
                 let mut buf = String::new();
                 let _ = std::io::stdin().read_line(&mut buf);
+                let buf = if buf.ends_with("\r\n") { &buf[0..buf.len() - 2] } else { &buf[0..buf.len() - 1] };
                 ok! { kroth.push(KrothValue::String(Box::from(buf))) }
             }
             Command::Cast => {
-                use RuntimeError::{CastError, InvalidType};
+                use RuntimeError::{CastError};
 
-                let val = match kroth.pop() {
-                    None => { return Err(NotEnoughElements { expected: 2, found: 0 }); }
-                    Some(val) => val,
-                };
                 let typ = match kroth.pop() {
                     None => { return Err(NotEnoughElements { expected: 2, found: 1 }); }
                     Some(KrothValue::Type(typ)) => typ,
                     Some(val) => { return Err(InvalidType { expected_type: KrothType::Typ, found_val: val }); }
                 };
+                let val = match kroth.pop() {
+                    None => { return Err(NotEnoughElements { expected: 2, found: 0 }); }
+                    Some(val) => val,
+                };
 
-                let res = match typ {
-                    KrothType::Str => { KrothValue::String(Box::from(val.to_string())) }
-                    KrothType::Num => match val {
-                        KrothValue::Number(_) => val,
-                        KrothValue::String(ref str) => {
-                            match str.parse::<BigDecimal>() {
-                                Ok(num) => KrothValue::Number(num),
-                                Err(_) => { return Err(CastError { to_type: KrothType::Num, failed_val: val }); }
-                            }
+                let res = match (typ, &val) {
+                    (KrothType::Blck, _) => { return Err(CastError { to_type: KrothType::Blck, failed_val: val }); }
+                    (typ, KrothValue::Block(_)) => { return Err(CastError { to_type: typ, failed_val: val }); }
+                    (KrothType::Str, _) => KrothValue::String(Box::from(val.to_string())),
+                    (KrothType::Num, KrothValue::Number(_)) => val,
+                    (KrothType::Num, KrothValue::String(str)) => {
+                        match str.parse::<BigDecimal>() {
+                            Ok(num) => KrothValue::Number(num),
+                            Err(_) => { return Err(CastError { to_type: KrothType::Num, failed_val: val }); }
                         }
-                        KrothValue::Type(_) => { return Err(CastError { to_type: KrothType::Num, failed_val: val }); }
                     }
-                    KrothType::Typ => match val {
-                        KrothValue::Number(_) => { return Err(CastError { to_type: KrothType::Typ, failed_val: val }); }
-                        KrothValue::String(ref str) => {
-                            if str.as_ref() == "Number" {
-                                KrothValue::Type(KrothType::Num)
-                            } else if str.as_ref() == "String" {
-                                KrothValue::Type(KrothType::Str)
-                            } else if str.as_ref() == "Type" {
-                                KrothValue::Type(KrothType::Typ)
-                            } else {
-                                return Err(CastError { to_type: KrothType::Typ, failed_val: val });
-                            }
+                    (KrothType::Num, _) => { return Err(CastError { to_type: KrothType::Num, failed_val: val }); }
+                    (KrothType::Typ, KrothValue::Number(_)) => { return Err(CastError { to_type: KrothType::Typ, failed_val: val }); }
+                    (KrothType::Typ, KrothValue::Type(_)) => val,
+                    (KrothType::Typ, KrothValue::String(str)) => {
+                        match str.as_ref() {
+                            "Number" => KrothValue::Type(KrothType::Num),
+                            "String" => KrothValue::Type(KrothType::Str),
+                            "Type" => KrothValue::Type(KrothType::Typ),
+                            _ => err! {CastError { to_type: KrothType::Typ, failed_val: val }}
                         }
-                        KrothValue::Type(_) => { val }
                     }
                 };
 
                 ok! { kroth.push(res) }
+            }
+            Command::Call => {
+                match kroth.pop() {
+                    None => err!(EmptyStackError),
+                    Some(KrothValue::Block(commands)) => ok! {
+                        for command in commands {
+                            command.operate(kroth)?
+                        }
+                    },
+                    Some(val) => err! { InvalidType {expected_type: KrothType::Blck, found_val: val} },
+                }
             }
             Command::Push(val) => {
                 ok! { kroth.stack.push(val) }

@@ -1,0 +1,5 @@
+"Enter a value to cast" print
+input
+"Enter a type to cast to" print
+{cast dup print}
+input <Type> cast swap call
