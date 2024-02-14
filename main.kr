@@ -1,10 +1,2 @@
-"euler 1" print
-0 &sum
-1 &i
-{ *i 1000 lt } dup call {
-    *i 3 mod 0 eq *i 5 mod 0 eq or {
-        *sum *i add &sum
-    } if
-    *i 1 add &i
-dup call } while
-*sum print
+{ input <Bool> cast } dup call
+{ dup call } if
