@@ -202,6 +202,10 @@ pub enum Command {
     Input,
     Cast,
     Call,
+    Rev,
+    Rot,
+    Empty,
+    Count,
     Push(KrothValue),
 
     Add,
@@ -408,6 +412,24 @@ impl Command {
             Command::GetVar(name) => {
                 let Some(val) = kroth.get(&name) else { err!(NoVarError(name)) };
                 ok! { kroth.push(val.clone()) }
+            }
+            Command::Rev => {
+                ok! { kroth.stack.reverse() }
+            }
+            Command::Rot => {
+                ensure_size!(kroth, 3);
+                let el = kroth.stack.remove(kroth.stack.len() - 3);
+                ok! { kroth.push(el) }
+            }
+            Command::Empty => {
+                ok! {
+                    kroth.push(KrothValue::Bool(kroth.stack.is_empty()))
+                }
+            }
+            Command::Count => {
+                ok! {
+                    kroth.stack.push(KrothValue::Number(BigDecimal::from(kroth.stack.len() as u128)))
+                }
             }
         }
     }

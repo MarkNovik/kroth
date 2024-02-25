@@ -1,3 +1,5 @@
+use std::env::args;
+use std::process::abort;
 use std::str::FromStr;
 
 use bigdecimal::{BigDecimal, Num};
@@ -11,22 +13,29 @@ use nom::multi::{many0, many1, separated_list0};
 use nom::number::complete::recognize_float;
 use nom::sequence::{preceded, terminated};
 
-
 use crate::runtime::{Command, Kroth, KrothType, KrothValue};
 
 mod runtime;
 
-fn main() {
-    let input = remove_comments(&std::fs::read_to_string("main.kr").unwrap());
-    match terminated(parse_input, eof)(&input) {
-        Ok((_, program)) => {
-            let mut kroth = Kroth::default();
-            if let Err(err) = kroth.run_program(program) {
-                println!("{err:?}")
-            }
+fn main() -> anyhow::Result<()> {
+    let mut args = args();
+    let program_path = args.next().unwrap();
+    let Some(file) = args.next()
+        else {
+            eprintln!("ERROR: No input file.\nUsage: {program_path} [input-file]");
+            abort()
+        };
+    let input = remove_comments(&std::fs::read_to_string(file)?);
+    let program = match terminated(parse_input, eof)(&input) {
+        Ok((_, program)) => program,
+        Err(err) => {
+            eprintln!("{err}");
+            abort()
         }
-        Err(err) => println!("{err:?}")
     };
+    let mut kroth = Kroth::default();
+    kroth.run_program(program)?;
+    Ok(())
 }
 
 fn remove_comments(input: &str) -> String {
@@ -46,7 +55,8 @@ fn parse_input(input: &str) -> IResult<&str, Vec<Command>> {
         bool_literal.map(|b| Command::Push(KrothValue::Bool(b))),
         basic_command,
         block.map(|cmds| Command::Push(KrothValue::Block(cmds))),
-        var
+        var,
+        empty_check
     )))(input.trim())
 }
 
@@ -60,7 +70,8 @@ fn basic_command(input: &str) -> IResult<&str, Command> {
     }
     use Command::*;
     alt((
-        alt(literal!(Drop, Dup, Over, Swap, Print, Input, Cast, Call)),
+        alt(literal!(Drop, Dup, Over, Swap, Rev, Rot, Count)),
+        alt(literal!(Print, Input, Cast, Call)),
         alt(literal!(IfElse, If, While)),
         alt(literal!(Add, Sub, Mul, Div, Mod)),
         alt(literal!(Xor, Or, And, Not)),
@@ -75,6 +86,10 @@ fn type_literal(input: &str) -> IResult<&str, KrothType> {
         tag("Type").map(|_| KrothType::Typ),
         tag("Bool").map(|_| KrothType::Bool),
     ))), single_char('>'))(input)
+}
+
+fn empty_check(input: &str) -> IResult<&str, Command> {
+    tag("empty?").map(|_| Command::Empty).parse(input)
 }
 
 fn string_char(input: &str) -> IResult<&str, char> {
